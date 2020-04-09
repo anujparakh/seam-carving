@@ -32,7 +32,7 @@ def readGrayscale(id, path = ""):
     return toReturn
 
 
-def SeamCarve(inputImage, widthFac, heightFac, mask):
+def SeamCarve(inputImage, label, widthFac, heightFac, mask):
 
     # Main seam carving function. This is done in three main parts: 1)
     # computing the energy function, 2) finding optimal seam, and 3) removing
@@ -42,16 +42,20 @@ def SeamCarve(inputImage, widthFac, heightFac, mask):
     assert (widthFac <= 1 and heightFac <= 1), 'Increasing the size is not supported!'
 
     divider = widthFac
+    inSize = inputImage.shape
+    sizeToReturn = (int(inSize[0]), int(divider * inSize[1]), 3)
+    
     if (heightFac != 1):
         inputImage = cv2.rotate(inputImage, cv2.ROTATE_90_CLOCKWISE)
         divider = heightFac
+        sizeToReturn = (int(divider * inSize[0]), int(inSize[1]), 3)
 
     inSize = inputImage.shape
     size   = (int(inSize[0]), int(divider * inSize[1]), 3)
 
     toReturn = inputImage
-    print (size)
-
+    seamNo = 0
+    totalSeams = inSize[1] - size[1]
     while (toReturn.shape != size):
         # Step 1: Generate energy function
         energyFunc = generateEnergyFunction(toReturn)        
@@ -68,12 +72,13 @@ def SeamCarve(inputImage, widthFac, heightFac, mask):
 
         # print("3. Current Time =", current_milli_time())
 
-        print("Image Size: " + str(toReturn.shape))
+        print(label + str(sizeToReturn[1]) + "x" + str(sizeToReturn[0]) + " seam number " + str(seamNo) + " of " + str(totalSeams) + " done")
+        seamNo += 1
 
     if (heightFac != 1):
         toReturn = cv2.rotate(toReturn, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-    return toReturn, toReturn.shape[:2]
+    return toReturn, sizeToReturn
 
 # Calculates and returns energy function for given image
 def generateEnergyFunction(img):
@@ -96,24 +101,25 @@ def findOptimalSeam(energyFunc):
 
     # Calculate the cost matrix
     for rowIndex in range(1, numRows):
-        for colIndex in range (0, numCols):
-            if (colIndex == 0):
-                costMatrix [rowIndex] [colIndex] += min([costMatrix[rowIndex - 1][colIndex], costMatrix[rowIndex - 1][colIndex + 1]])
-            elif (colIndex == numCols - 1):
-                costMatrix [rowIndex] [colIndex] += min([costMatrix[rowIndex - 1][colIndex - 1], costMatrix[rowIndex - 1][colIndex]])
-            else:
-                costMatrix [rowIndex] [colIndex] += min([costMatrix[rowIndex - 1][colIndex - 1], costMatrix[rowIndex - 1][colIndex], costMatrix[rowIndex - 1][colIndex + 1]])
+        costMatrix [rowIndex] [0] += min(costMatrix[rowIndex - 1, 0:2])
+
+        for colIndex in range (1, numCols - 1):
+            costMatrix [rowIndex] [colIndex] += min(costMatrix[rowIndex - 1, colIndex - 1:colIndex + 2])
+        
+        colIndex = numCols - 1
+        costMatrix [rowIndex] [colIndex] += min(costMatrix[rowIndex - 1, colIndex - 1:colIndex + 1])
+
     
     # Start from the bottom and find the optimal seam
     seam[numRows - 1] = int(np.argmin(costMatrix[numRows - 1]))
     for rowIndex in range(numRows - 2, -1, -1):
         lastSeamIndex = int(seam[rowIndex + 1])
         if (lastSeamIndex == 0):
-            seam[rowIndex] = int(np.argmin([costMatrix[rowIndex][lastSeamIndex], costMatrix[rowIndex][lastSeamIndex + 1]]))
+            seam[rowIndex] = int(np.argmin(costMatrix[rowIndex, lastSeamIndex: lastSeamIndex + 2]))
         elif (lastSeamIndex == numCols - 1):
-            seam[rowIndex] = int(lastSeamIndex - 1 + np.argmin([costMatrix[rowIndex][lastSeamIndex - 1], costMatrix[rowIndex][lastSeamIndex]]))
+            seam[rowIndex] = int(lastSeamIndex - 1 + np.argmin(costMatrix[rowIndex, lastSeamIndex - 1: lastSeamIndex + 1]))
         else:
-            seam[rowIndex] = int(lastSeamIndex + np.argmin([costMatrix[rowIndex][lastSeamIndex - 1], costMatrix[rowIndex][lastSeamIndex], costMatrix[rowIndex][lastSeamIndex + 1]]) - 1)
+            seam[rowIndex] = int(lastSeamIndex + np.argmin(costMatrix[rowIndex, lastSeamIndex - 1: lastSeamIndex + 2]) - 1)
 
     return seam
 
@@ -122,13 +128,18 @@ def findOptimalSeam(energyFunc):
 # Remove the seam from the image
 def removeSeam(image, seam):
     numRows, numCols, _ = image.shape
+    toReturn = np.zeros([numRows, numCols - 1, 3])
+    seam = seam.astype(np.uint16)
     #remove seam from image and adjust all other cols
     for rowIndex in range(0, numRows):
-        #remove seam from imae and move over all other cols
-        for colIndex in range(int(seam[rowIndex]), numCols - 1):
-            image[rowIndex][colIndex] = image[rowIndex] [colIndex + 1]
-    small_image = image [:, 0:numCols-1]
-    return small_image
+        toReturn [rowIndex][:seam[rowIndex]] = image [rowIndex][:seam[rowIndex]]
+        toReturn [rowIndex][seam[rowIndex]: numCols] = image [rowIndex][seam[rowIndex] + 1:numCols]
+        
+        # #remove seam from imae and move over all other cols
+        # for colIndex in range(int(seam[rowIndex]), numCols - 1):
+        #     image[rowIndex][colIndex] = image[rowIndex] [colIndex + 1]
+
+    return toReturn
 
 
 # Gets the index of the smallest element
@@ -158,12 +169,12 @@ outputDir = '../Results/'
 
 N = 4 # number of images
 
-for index in range(1, N + 1):
+for index in range(1,2):
 
     inputImage, mask = Read(str(index).zfill(2), inputDir)
 
     # Seam Carve for half the width
-    output, size = SeamCarve(inputImage, 0.5, 1, mask)
+    output, size = SeamCarve(inputImage, "image" + str(index) + "_", 0.5, 1, mask)
     # Writing the result
     cv2.imwrite("{}/result_{}_{}x{}.jpg".format(outputDir, 
                                             str(index).zfill(2), 
@@ -172,13 +183,13 @@ for index in range(1, N + 1):
     
     print("Image " + str(index) + " by width done")
 
-    inputImage, mask = Read(str(index).zfill(2), inputDir)
+    # inputImage, mask = Read(str(index).zfill(2), inputDir)
 
-    # Seam Carve for half the height
-    output, size = SeamCarve(inputImage, 1, 0.5, mask)
-    # Writing the result
-    cv2.imwrite("{}/result_{}_{}x{}.jpg".format(outputDir, 
-                                            str(index).zfill(2), 
-                                            str(size[1]).zfill(2), 
-                                            str(size[0]).zfill(2)), output)
-    print("Image " + str(index) + " by height done")
+    # # Seam Carve for half the height
+    # output, size = SeamCarve(inputImage, "image" + str(index) + "_" , 1, 0.5, mask)
+    # # Writing the result
+    # cv2.imwrite("{}/result_{}_{}x{}.jpg".format(outputDir, 
+    #                                         str(index).zfill(2), 
+    #                                         str(size[1]).zfill(2), 
+    #                                         str(size[0]).zfill(2)), output)
+    # print("Image " + str(index) + " by height done")
